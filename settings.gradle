@@ -1,0 +1,9 @@
+rootProject.name = 'txcaptcha-resolver'
+
+
+include ':app'
+include ':common:network'
+include ':common:server'
+include ':common:client'
+
+include ':txcaptcha-resolver-mirai-login-solver'

@@ -1,0 +1,13 @@
+plugins {
+    id 'net.mamoe.mirai-console' version '2.12.0-RC'
+    id 'org.jetbrains.kotlin.jvm'
+}
+
+dependencies {
+    implementation(project(':common:server'))
+    implementation(project(':common:client'))
+    implementation 'com.miglayout:miglayout-swing:11.0'
+
+    testImplementation 'com.formdev:flatlaf:2.3'
+    testImplementation 'com.formdev:flatlaf-intellij-themes:2.3'
+}

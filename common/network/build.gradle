@@ -1,0 +1,15 @@
+plugins {
+    id 'java'
+    id 'java-library'
+}
+
+dependencies {
+    api "io.netty:netty-handler:$netty_version"
+    testImplementation parent.project('client')
+    testImplementation parent.project('server')
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}

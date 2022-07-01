@@ -1,0 +1,43 @@
+########################################################################
+## Network Packets                                                    ##
+########################################################################
+
+#bitencoding = BE
+
+typedef Packet {
+    int16   packetid;
+    int16   payloadlen;
+    byte    payload[payloadlen];
+}
+
+defpkg [   0]   KeepAlive {
+}
+
+defpkg [   1]   NewProcessCodeReq {
+}
+
+defpkg [   2]   NewProcessCodeResp {
+    byte    fastcode[8];
+}
+
+defpkg [   3]   ProcessCodeComplete {
+    int16   ticketlen;
+    byte    ticket[ticketlen];
+    byte    fastcode[8];
+}
+
+defpkg [   4]   QueryProcessCodeStatus {
+    byte    fastcode[8];
+}
+
+defpkg [   5]   QueryProcssCodeStatusResp {
+    bool    completed;
+    utf-8   ticket;
+    byte    fastcode[8];
+}
+
+########################################################################
+## QRCode Exchange                                                    ##
+########################################################################
+
+<txcaptcha>:=/captcha?url=.......&fastcode=......&server=.......&serverport=.....

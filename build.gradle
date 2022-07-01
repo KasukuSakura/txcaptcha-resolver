@@ -1,0 +1,44 @@
+// Top-level build file where you can add configuration options common to all sub-projects/modules.
+
+buildscript {
+    def androidProjectAvaliable = false
+    try {
+        project(':app')
+        androidProjectAvaliable = true
+    } catch (Throwable ignored) {
+    }
+
+    ext.kotlin_version = '1.6.21'
+    ext.netty_version = '4.1.78.Final'
+
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+
+    if (androidProjectAvaliable) {
+        repositories {
+            mavenCentral()
+            google()
+            //jcenter()
+        }
+        dependencies {
+            classpath 'com.android.tools.build:gradle:4.2.2'
+            // NOTE: Do not place your application dependencies here; they belong
+            // in the individual module build.gradle files
+        }
+    }
+
+}
+
+allprojects {
+    repositories {
+        mavenCentral()
+        google()
+        //jcenter()
+
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
