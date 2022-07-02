@@ -24,7 +24,7 @@ fun main() {
         topFrame.setLocationRelativeTo(null)
         topFrame.isVisible = true
         topFrame.defaultCloseOperation = JFrame.DISPOSE_ON_CLOSE
-        val rsp = openWindowCommon(topFrame, isTopLevel = false) {
+        val rsp = openWindowCommon(topFrame, "Test", isTopLevel = false) {
             layout.layoutConstraints = ""
 
             filledTextField("Test", "https://github.com")

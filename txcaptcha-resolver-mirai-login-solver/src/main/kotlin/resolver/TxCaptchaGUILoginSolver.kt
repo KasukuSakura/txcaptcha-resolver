@@ -9,47 +9,360 @@
 
 package com.kasukusakura.tcrs.mls.resolver
 
-import kotlinx.coroutines.CompletableDeferred
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.client.j2se.MatrixToImageWriter
+import com.google.zxing.qrcode.QRCodeWriter
+import com.kasukusakura.tcrs.client.AutoReconnectClientConnection
+import com.kasukusakura.tcrs.server.TCRSServerChannelInitializer
+import io.ktor.util.network.*
+import io.netty.bootstrap.ServerBootstrap
+import io.netty.channel.Channel
+import io.netty.channel.ChannelFuture
+import io.netty.channel.ChannelHandlerContext
+import io.netty.channel.EventLoopGroup
+import io.netty.channel.nio.NioEventLoopGroup
+import io.netty.channel.socket.nio.NioServerSocketChannel
+import kotlinx.coroutines.*
 import net.mamoe.mirai.Bot
 import net.mamoe.mirai.utils.LoginSolver
+import net.mamoe.mirai.utils.MiraiLogger
+import net.mamoe.mirai.utils.debug
+import net.mamoe.mirai.utils.verbose
 import net.miginfocom.swing.MigLayout
 import java.awt.*
 import java.awt.event.*
+import java.awt.image.BufferedImage
+import java.beans.PropertyChangeEvent
 import java.beans.PropertyChangeListener
+import java.io.ByteArrayInputStream
+import java.net.*
 import java.util.*
+import java.util.concurrent.TimeUnit
+import java.util.function.Supplier
+import javax.imageio.ImageIO
 import javax.swing.*
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
-class TxCaptchaGUILoginSolver : LoginSolver() {
+@Suppress("MemberVisibilityCanBePrivate")
+object TxCaptchaGUILoginSolver : LoginSolver() {
     override suspend fun onSolvePicCaptcha(bot: Bot, data: ByteArray): String? {
-        TODO("Not yet implemented")
+        val img = runInterruptible(Dispatchers.IO) {
+            val usingCache = ImageIO.getUseCache()
+            try {
+                ImageIO.setUseCache(false)
+                ImageIO.read(ByteArrayInputStream(data))
+            } finally {
+                if (usingCache) ImageIO.setUseCache(true)
+            }
+        }
+        return onSolvePicCaptcha(bot.id, img)
     }
 
     override suspend fun onSolveSliderCaptcha(bot: Bot, url: String): String? {
-        TODO("Not yet implemented")
+        return onSolveSliderCaptcha(bot.id, url, bot.logger)
     }
 
     override suspend fun onSolveUnsafeDeviceLoginVerify(bot: Bot, url: String): String? {
         TODO("Not yet implemented")
     }
+
+
+    internal suspend fun onSolvePicCaptcha(botid: Long, img: BufferedImage): String? {
+        return openWindowCommon(JFrame(), isTopLevel = true, title = "PicCaptcha($botid)") {
+            appendFillX(JLabel(ImageIcon(img)))
+            optionPane.options = arrayOf(
+                BTN_OK.attachToTextField(filledTextField("", "")).asInitialValue(),
+                BTN_CALCEL.withValue(WindowResult.Cancelled),
+            )
+        }.valueAsString
+    }
+
+    internal suspend fun onSolveSliderCaptcha(botid: Long, captchaUrl: String, logger: MiraiLogger): String? {
+        return openWindowCommon(JFrame(), isTopLevel = true, title = "SliderCaptcha($botid)") {
+            fun alertError(msg: String) {
+                JOptionPane.showMessageDialog(
+                    parentWindow,
+                    msg,
+                    "Error[Slider Captcha]($botid)",
+                    JOptionPane.ERROR_MESSAGE
+                )
+            }
+            filledTextField("url", captchaUrl)
+            optionPane.options = arrayOf(
+                JButton("Use Captcha Server").withActionBlocking {
+                    val selfHosted = WindowResult.ConfirmedAnything()
+                    val serverMode = openWindowCommon(
+                        window = parentWindow, isTopLevel = false,
+                        blockingDisplay = true,
+                        title = "Captcha Exchange Server Select($botid)"
+                    ) {
+                        optionPane.options = arrayOf(
+                            JButton("Use Self Hosted").withValue(selfHosted),
+                            BTN_OK.attachToTextField(filledTextField("server", "")).asInitialValue(),
+                            BTN_CALCEL.withValue(WindowResult.Cancelled),
+                        )
+                    }
+                    if (serverMode.cancelled) {
+                        return@withActionBlocking
+                    }
+                    val eventLoopGroup: EventLoopGroup
+                    val remoteAddress: SocketAddress
+                    val captchaExchangeServerResponse = CompletableDeferred<WindowResult>()
+                    if (serverMode === selfHosted) {
+                        eventLoopGroup = NioEventLoopGroup()
+                        val serverChannel = ServerBootstrap()
+                            .channel(NioServerSocketChannel::class.java)
+                            .group(eventLoopGroup)
+                            .childHandler(object : TCRSServerChannelInitializer() {
+                                override fun debugMsg(ctx: ChannelHandlerContext, msg: Supplier<String>) {
+                                    logger.debug { ctx.channel().toString() + " || " + msg.get() }
+                                }
+
+                                override fun debugMsgVerbose(ctx: ChannelHandlerContext, msg: Supplier<String>) {
+                                    logger.verbose { ctx.channel().toString() + " || " + msg.get() }
+                                }
+
+                                override fun logError(error: Throwable?) {
+                                    logger.warning("Server error: ${error?.localizedMessage}", error)
+                                }
+                            })
+                            .bind(0)
+                            .await()
+                            .channel()
+                        captchaExchangeServerResponse.invokeOnCompletion { serverChannel.close() }
+
+                        remoteAddress = serverChannel.localAddress()
+                    } else {
+                        val remoteServer = serverMode.valueAsString?.trim() ?: return@withActionBlocking
+                        if (remoteServer.isBlank()) {
+                            alertError("No remote server provided.")
+                            return@withActionBlocking
+                        }
+                        if ((remoteServer[0] == '[' && remoteServer.last() == ']')
+                            || !remoteServer.contains(':')
+                        ) {
+                            alertError("Invalid remote server address: $remoteServer: no port")
+                            return@withActionBlocking
+                        }
+                        remoteAddress = try {
+                            InetSocketAddress.createUnresolved(
+                                remoteServer.substringBeforeLast(':'),
+                                remoteServer.substringAfterLast(':').toInt(),
+                            )
+                        } catch (err: Throwable) {
+                            logger.warning(err)
+                            alertError(err.localizedMessage)
+                            return@withActionBlocking
+                        }
+                        eventLoopGroup = NioEventLoopGroup()
+                    }
+
+                    openWindowCommon(
+                        window = parentWindow,
+                        isTopLevel = false,
+                        title = "Captcha Server Exchange($botid, $remoteAddress)",
+                        overrideResponse = captchaExchangeServerResponse,
+                        blockingDisplay = true,
+                    ) {
+
+                        val fastCodeView = JLabel("<waiting....>")
+                        appendFillWithLabel("fastcode", fastCodeView)
+
+                        if (serverMode === selfHosted) {
+                            val addresses = NetworkInterface.getNetworkInterfaces().asSequence().filter {
+                                !it.isLoopback
+                            }.flatMap { itf ->
+                                itf.inetAddresses.asSequence()
+                            }.toMutableList()
+                            addresses.sortWith(kotlin.Comparator { i1, i2 ->
+                                if (i1 is Inet4Address && i2 is Inet6Address) {
+                                    return@Comparator -1
+                                }
+                                if (i2 is Inet4Address && i1 is Inet6Address) {
+                                    return@Comparator 1
+                                }
+                                return@Comparator i1.toString().compareTo(i2.toString())
+                            })
+                            val chooser = JComboBox<String>()
+                            addresses.forEach { chooser.addItem(it.toString()) }
+                            appendFillWithLabel("Hosted Server InetAddress", chooser)
+
+                            val qrcode = JLabel()
+                            val listener = object : PropertyChangeListener, ItemListener {
+                                override fun propertyChange(evt: PropertyChangeEvent?) {
+                                    update()
+                                }
+
+                                override fun itemStateChanged(e: ItemEvent?) {
+                                    update()
+                                }
+
+                                fun update() {
+                                    val v = chooser.selectedItem
+                                    if (v != null) {
+                                        // <txcaptcha>:=/captcha?fastcode=......&server=.......&serverport=.....
+                                        val fasturl = "<txcaptcha>:=/captcha?fastcode=${fastCodeView.text}&server=${
+                                            URLEncoder.encode(
+                                                v.toString(),
+                                                "UTF-8"
+                                            )
+                                        }&port=${remoteAddress.port}"
+                                        logger.debug { fasturl }
+
+                                        val bitMatrix = QRCodeWriter().encode(
+                                            fasturl,
+                                            BarcodeFormat.QR_CODE,
+                                            500,
+                                            500
+                                        )
+
+                                        val img = MatrixToImageWriter.toBufferedImage(bitMatrix)
+                                        qrcode.icon = ImageIcon(img)
+                                    }
+                                }
+                            }
+
+                            chooser.addPropertyChangeListener(listener)
+                            chooser.addItemListener(listener)
+                            fastCodeView.addPropertyChangeListener(listener)
+                            appendFillX(qrcode)
+
+                            captchaExchangeServerResponse.invokeOnCompletion {
+                                fastCodeView.removePropertyChangeListener(listener)
+                                chooser.removeItemListener(listener)
+                                chooser.removePropertyChangeListener(listener)
+                            }
+                        }
+
+                        val msgOutput = JLabel()
+                        appendFillX(msgOutput)
+
+                        val connection = object : AutoReconnectClientConnection() {
+                            override fun logError(throwable: Throwable?, ctx: ChannelHandlerContext?) {
+                                msgOutput.text = throwable.toString()
+                                logger.debug("Client Error:${throwable?.localizedMessage}", throwable)
+                            }
+
+                            init {
+                                this.eventLoopGroup = eventLoopGroup
+                            }
+
+                            override fun onFastCodeReceived(fastcode: ByteArray) {
+                                fastCodeView.text = String(fastcode)
+                                sendProcessCodeInfoUpdate(CAPTCHA_TYPE_SLIDER, captchaUrl.toByteArray(), fastcode)
+
+                                eventLoopGroup.scheduleWithFixedDelay({
+                                    sendProcessCodeInfoUpdate(CAPTCHA_TYPE_SLIDER, captchaUrl.toByteArray(), fastcode)
+                                }, 30, 30, TimeUnit.SECONDS)
+                                eventLoopGroup.scheduleWithFixedDelay({
+                                    sendProcessCodeRefresh(fastcode)
+                                }, 10, 10, TimeUnit.SECONDS)
+
+                                eventLoopGroup.scheduleWithFixedDelay({
+                                    sendTicketQueryRequest(fastcode)
+                                }, 1, 1, TimeUnit.SECONDS)
+                            }
+
+                            override fun onTickReceived(ticket: ByteArray?, fastcode: ByteArray?) {
+                                if (ticket != null) {
+                                    captchaExchangeServerResponse.complete(WindowResult.Confirmed(String(ticket)))
+                                }
+                            }
+
+                            override fun bindConnection(channel: Channel?) {
+                                super.bindConnection(channel)
+                                msgOutput.text = ""
+                            }
+                        }
+                        connection.connect(remoteAddress)
+
+                        captchaExchangeServerResponse.invokeOnCompletion {
+                            connection.disconnect()
+                            eventLoopGroup.shutdownGracefully()
+                        }
+                        connection.sendNewFastCodeReq()
+                    }
+
+                    val captchaExchangeResponse = captchaExchangeServerResponse.await()
+                    logger.debug { "Response from CaptchaExchange: $captchaExchangeResponse" }
+                    if (captchaExchangeResponse.cancelled) return@withActionBlocking
+                    response.complete(captchaExchangeResponse)
+                },
+                BTN_OK.attachToTextField(filledTextField("ticket", "")).asInitialValue(),
+                BTN_CALCEL.withValue(WindowResult.Cancelled),
+            )
+        }.also { rsp ->
+            logger.debug { "Response from TopLevel: $rsp" }
+        }.valueAsString
+    }
 }
 
 internal sealed class WindowResult {
-    internal object Cancelled : WindowResult()
-    internal object WindowClosed : WindowResult()
+    abstract val cancelled: Boolean
+    abstract val valueAsString: String?
+    abstract val value: Any?
 
-    internal object SelectedOK : WindowResult()
+    internal object Cancelled : WindowResult() {
+        override val valueAsString: String? get() = null
+        override val value: Any? get() = null
+        override val cancelled: Boolean get() = true
 
-    internal class Confirmed(val data: String) : WindowResult() {
         override fun toString(): String {
-            return "Confirmed<$data>"
+            return "WindowResult.Cancelled"
+        }
+    }
+
+    internal object WindowClosed : WindowResult() {
+        override val valueAsString: String? get() = null
+        override val value: Any? get() = null
+        override val cancelled: Boolean get() = true
+
+        override fun toString(): String {
+            return "WindowResult.WindowClosed"
+        }
+    }
+
+    internal object SelectedOK : WindowResult() {
+        override val valueAsString: String get() = "true"
+        override val value: Any get() = true
+        override val cancelled: Boolean get() = false
+
+        override fun toString(): String {
+            return "WindowResult.SelectedOK"
+        }
+    }
+
+    internal class Confirmed(private val data: String) : WindowResult() {
+        override fun toString(): String {
+            return "WindowResult.Confirmed($data)"
+        }
+
+        override val valueAsString: String get() = data
+        override val value: Any get() = data
+        override val cancelled: Boolean get() = false
+    }
+
+    internal class ConfirmedAnything(override val value: Any? = null) : WindowResult() {
+        override val valueAsString: String?
+            get() = value?.toString()
+
+        override val cancelled: Boolean get() = false
+
+        override fun toString(): String {
+            return "WindowResult.ConfirmedAnything(value=$value)@${hashCode()}"
         }
     }
 }
 
+@Suppress("PropertyName")
 internal class WindowsOptions(
     val layout: MigLayout,
     val contentPane: Container,
     val optionPane: JOptionPane,
+    val response: CompletableDeferred<WindowResult>,
+    val parentWindow: Window,
 ) {
     var width: Int = 3
 
@@ -57,14 +370,19 @@ internal class WindowsOptions(
         contentPane.add(sub, "spanx $width,growx,wrap")
     }
 
+    fun appendFillWithLabel(name: String, comp: Component): JLabel {
+        val label = JLabel(name)
+        contentPane.add(label)
+        contentPane.add(comp.also { label.labelFor = it }, "spanx ${width - 1},growx,wrap")
+        return label
+    }
+
     fun filledTextField(name: String, value: String): JTextField {
         val field = JTextField(value)
         if (name.isEmpty()) {
             appendFillX(field)
         } else {
-            val label = JLabel(name)
-            contentPane.add(label)
-            contentPane.add(field.also { label.labelFor = it }, "spanx ${width - 1},growx,wrap")
+            appendFillWithLabel(name, field)
         }
         return field
     }
@@ -86,19 +404,22 @@ internal class WindowsOptions(
         ButtonFactory(
             UIManager.getString("OptionPane.yesButtonText", l),
             getMnemonic("OptionPane.yesButtonMnemonic", l),
-            null, -1)
+            null, -1
+        )
     }
     val BTN_NO by lazy {
         ButtonFactory(
             UIManager.getString("OptionPane.noButtonText", l),
             getMnemonic("OptionPane.noButtonMnemonic", l),
-            null, -1)
+            null, -1
+        )
     }
     val BTN_OK by lazy {
         ButtonFactory(
             UIManager.getString("OptionPane.okButtonText", l),
             getMnemonic("OptionPane.okButtonMnemonic", l),
-            null, -1)
+            null, -1
+        )
     }
     val BTN_CALCEL by lazy {
         ButtonFactory(
@@ -112,6 +433,10 @@ internal class WindowsOptions(
         optionPane.value = v
     }
 
+    fun JButton.withValue(v: WindowResult): JButton = withAction {
+        optionPane.value = v
+    }
+
     fun ButtonFactory.withAction(action: ActionListener): JButton {
         return createButton().also { btn ->
             btn.name = "OptionPane.button"
@@ -121,6 +446,11 @@ internal class WindowsOptions(
 
     fun ButtonFactory.attachToTextField(field: JTextField): JButton = withAction {
         optionPane.value = WindowResult.Confirmed(field.text)
+    }
+
+    fun <T : Any> T.asInitialValue(): T {
+        optionPane.initialValue = this@asInitialValue
+        return this@asInitialValue
     }
 }
 
@@ -163,31 +493,40 @@ internal class ButtonFactory(
 
 internal suspend fun openWindowCommon(
     window: Window,
+    title: String,
     isTopLevel: Boolean = true,
+    blockingDisplay: Boolean = false,
+    overrideResponse: CompletableDeferred<WindowResult>? = null,
     action: WindowsOptions.() -> Unit,
 ): WindowResult {
-    val response = CompletableDeferred<WindowResult>()
+    val response = overrideResponse ?: CompletableDeferred()
 
     val optionPane = JOptionPane()
     optionPane.messageType = JOptionPane.PLAIN_MESSAGE
     optionPane.optionType = JOptionPane.OK_CANCEL_OPTION
 
     val contentPane = JPanel()
-    val migLayout = MigLayout("debug", "[][][fill,grow]", "")
+    val migLayout = MigLayout("", "[][][fill,grow]", "")
     contentPane.layout = migLayout
     optionPane.message = contentPane
 
-    action.invoke(WindowsOptions(
-        layout = migLayout,
-        contentPane = contentPane,
-        optionPane = optionPane,
-    ))
 
     val realWindow = if (isTopLevel) {
+        (window as JFrame).title = title
         window
     } else {
-        JDialog(window)
+        JDialog(window, title, Dialog.ModalityType.APPLICATION_MODAL)
     }
+
+    action.invoke(
+        WindowsOptions(
+            layout = migLayout,
+            contentPane = contentPane,
+            optionPane = optionPane,
+            response = response,
+            parentWindow = realWindow,
+        )
+    )
 
     response.invokeOnCompletion {
         SwingUtilities.invokeLater { realWindow.dispose() }
@@ -269,7 +608,35 @@ internal suspend fun openWindowCommon(
     } else {
         realWindow.setLocationRelativeTo(window)
     }
-    realWindow.isVisible = true
+    if (blockingDisplay) {
+        realWindow.isVisible = true
+    } else {
+        SwingUtilities.invokeLater { realWindow.isVisible = true }
+    }
 
     return response.await()
+}
+
+internal fun JButton.withAction(action: ActionListener): JButton = apply {
+    addActionListener(action)
+}
+
+internal object SwingxDispatcher : CoroutineDispatcher() {
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        if (SwingUtilities.isEventDispatchThread()) block.run()
+        else SwingUtilities.invokeLater(block)
+    }
+
+}
+
+internal fun JButton.withActionBlocking(action: suspend CoroutineScope.() -> Unit): JButton = withAction {
+    runBlocking(SwingxDispatcher, block = action)
+}
+
+suspend fun ChannelFuture.awaitKotlin(): ChannelFuture {
+    if (isDone) return this
+    suspendCoroutine<Unit> { cont ->
+        addListener { cont.resume(Unit) }
+    }
+    return this
 }
