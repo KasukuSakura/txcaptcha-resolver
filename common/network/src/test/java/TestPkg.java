@@ -8,10 +8,7 @@
  */
 
 import com.kasukusakura.tcrs.network.PkgCodec;
-import com.kasukusakura.tcrs.network.packets.Packet;
-import com.kasukusakura.tcrs.network.packets.PkgKeepAlive;
-import com.kasukusakura.tcrs.network.packets.PkgNewProcessCode;
-import com.kasukusakura.tcrs.network.packets.PkgQueryProcessCodeStatus;
+import com.kasukusakura.tcrs.network.packets.*;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -60,6 +57,12 @@ public class TestPkg {
         packets.add(PkgQueryProcessCodeStatus.Req.req(random(random)));
         packets.add(PkgQueryProcessCodeStatus.Rsp.rsp(random(random), random(random)));
         packets.add(PkgKeepAlive.INSTANCE);
+        packets.add(PkgProcessCodeInfo.Update.update(random.nextInt() & 0xFFFF, random(random), random(random)));
+        packets.add(PkgProcessCodeInfo.Update.update(random.nextInt() & 0xFFFF, null, random(random)));
+        packets.add(PkgProcessCodeInfo.Response.response(random.nextInt() & 0xFFFF, random(random), random(random)));
+        packets.add(PkgProcessCodeInfo.Response.response(random.nextInt() & 0xFFFF, null, random(random)));
+        packets.add(PkgProcessCodeInfo.Query.query(random(random)));
+        packets.add(PkgProcessCodeInfo.Refresh.refresh(random(random)));
 
         PkgCodec codec = new PkgCodec();
         TestChannel testChannel = new TestChannel();

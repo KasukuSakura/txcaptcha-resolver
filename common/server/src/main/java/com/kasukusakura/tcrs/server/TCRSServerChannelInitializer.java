@@ -10,10 +10,7 @@
 package com.kasukusakura.tcrs.server;
 
 import com.kasukusakura.tcrs.network.PkgCodec;
-import com.kasukusakura.tcrs.network.packets.Packet;
-import com.kasukusakura.tcrs.network.packets.PkgKeepAlive;
-import com.kasukusakura.tcrs.network.packets.PkgNewProcessCode;
-import com.kasukusakura.tcrs.network.packets.PkgQueryProcessCodeStatus;
+import com.kasukusakura.tcrs.network.packets.*;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
@@ -44,6 +41,8 @@ public class TCRSServerChannelInitializer extends ChannelInitializer<Channel> {
 
     private static class CusPkgRsp extends PkgQueryProcessCodeStatus.Rsp {
         public long allocateTime;
+        public int captchaType;
+        public byte[] captchaData;
     }
 
     public void clearInvalidatedCaches() {
@@ -60,6 +59,7 @@ public class TCRSServerChannelInitializer extends ChannelInitializer<Channel> {
                 .addLast("processor", new TCRSServerChannelHandler());
     }
 
+    @SuppressWarnings("UnnecessaryReturnStatement")
     private void handlePacket(ChannelHandlerContext ctx, Packet pkg) {
         if (pkg == PkgKeepAlive.INSTANCE) return;
         if (pkg == PkgNewProcessCode.Req.INSTANCE) {
@@ -102,6 +102,49 @@ public class TCRSServerChannelInitializer extends ChannelInitializer<Channel> {
                 ctx.write(PkgQueryProcessCodeStatus.Rsp.rsp(req.fastcode, null));
             }
             ctx.flush();
+            return;
+        }
+        if (pkg instanceof PkgProcessCodeInfo.Update) {
+            PkgProcessCodeInfo.Update req = (PkgProcessCodeInfo.Update) pkg;
+            String key = new String(req.fastcode, StandardCharsets.ISO_8859_1);
+            CusPkgRsp session = processes.get(key);
+            if (session == null) {
+                debugMsg(ctx, () -> "Skipped PkgProcessCodeInfo.Update because session[" + key + "] not found");
+                return;
+            }
+            session.allocateTime = System.currentTimeMillis();
+            session.captchaType = req.captchaType;
+            session.captchaData = req.captchaData;
+            debugMsg(ctx, () -> "Processed PkgProcessCodeInfo.Update[" + key + "] with captcha type [" + req.captchaType + "]");
+            return;
+        }
+        if (pkg instanceof PkgProcessCodeInfo.Refresh) {
+            PkgProcessCodeInfo.Refresh req = (PkgProcessCodeInfo.Refresh) pkg;
+            String key = new String(req.fastcode, StandardCharsets.ISO_8859_1);
+            CusPkgRsp session = processes.get(key);
+            if (session == null) {
+                debugMsg(ctx, () -> "Skipped PkgProcessCodeInfo.Refresh because session[" + key + "] not found");
+                return;
+            }
+            session.allocateTime = System.currentTimeMillis();
+            // debugMsg(ctx, () -> "Processed PkgProcessCodeInfo.Refresh[" + key + "]");
+            return;
+        }
+        if (pkg instanceof PkgProcessCodeInfo.Query) {
+            PkgProcessCodeInfo.Query req = (PkgProcessCodeInfo.Query) pkg;
+            String key = new String(req.fastcode, StandardCharsets.ISO_8859_1);
+            CusPkgRsp session = processes.get(key);
+            if (session == null) {
+                debugMsg(ctx, () -> "Skipped PkgProcessCodeInfo.Query because session[" + key + "] not found");
+                ctx.writeAndFlush(PkgProcessCodeInfo.Response.response(0, null, req.fastcode));
+                return;
+            }
+            session.allocateTime = System.currentTimeMillis();
+            ctx.writeAndFlush(PkgProcessCodeInfo.Response.response(
+                    session.captchaType, session.captchaData, req.fastcode
+            ));
+            debugMsg(ctx, () -> "Responded PkgProcessCodeInfo.Query[" + key + "] with captcha type[" + session.captchaType + "]");
+            return;
         }
     }
 

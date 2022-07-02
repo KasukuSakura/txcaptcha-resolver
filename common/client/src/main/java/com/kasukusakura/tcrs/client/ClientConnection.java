@@ -11,10 +11,7 @@ package com.kasukusakura.tcrs.client;
 
 
 import com.kasukusakura.tcrs.network.PkgCodec;
-import com.kasukusakura.tcrs.network.packets.Packet;
-import com.kasukusakura.tcrs.network.packets.PkgKeepAlive;
-import com.kasukusakura.tcrs.network.packets.PkgNewProcessCode;
-import com.kasukusakura.tcrs.network.packets.PkgQueryProcessCodeStatus;
+import com.kasukusakura.tcrs.network.packets.*;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
@@ -39,12 +36,35 @@ public abstract class ClientConnection {
     }
 
     protected void sendPacket(Object pkg) {
-        if (disconnected) return;
+        if (disconnected) {
+            pendingPacketsToSend.clear();
+            return;
+        }
         if (bindChannel != null && bindChannel.isOpen() && bindChannel.isActive()) {
             if (bindChannel.eventLoop().inEventLoop()) {
-                bindChannel.writeAndFlush(pkg);
-            } else {
-                bindChannel.eventLoop().execute(() -> bindChannel.writeAndFlush(pkg));
+                while (true) {
+                    Object next = pendingPacketsToSend.poll();
+                    if (next == null) break;
+                    bindChannel.write(next);
+                }
+
+                if (pkg != null) {
+                    bindChannel.writeAndFlush(pkg);
+                } else bindChannel.flush();
+            } else if (pkg != null || !pendingPacketsToSend.isEmpty()) {
+                bindChannel.eventLoop().execute(() -> {
+                    while (true) {
+                        Object next = pendingPacketsToSend.poll();
+                        if (next == null) break;
+                        bindChannel.write(next);
+                    }
+
+                    if (pkg == null) {
+                        bindChannel.flush();
+                    } else {
+                        bindChannel.writeAndFlush(pkg);
+                    }
+                });
             }
         } else {
             pendingPacketsToSend.add(pkg);
@@ -67,6 +87,21 @@ public abstract class ClientConnection {
         sendPacket(PkgNewProcessCode.Req.INSTANCE);
     }
 
+    public void sendProcessCodeInfoUpdate(int captchaType, byte[] cpatchaData, byte[] fastcode) {
+        sendPacket(PkgProcessCodeInfo.Update.update(captchaType, cpatchaData, fastcode));
+    }
+
+    public void sendProcessCodeRefresh(byte[] fastcode) {
+        sendPacket(PkgProcessCodeInfo.Refresh.refresh(fastcode));
+    }
+
+    public void fetchProcessCodeInfo(byte[] fastcode) {
+        sendPacket(PkgProcessCodeInfo.Query.query(fastcode));
+    }
+
+    protected void onReceivedProcessCodeInfo(PkgProcessCodeInfo.Response response) {
+    }
+
 
     protected Bootstrap basicBootstrap() {
         return new Bootstrap()
@@ -83,15 +118,7 @@ public abstract class ClientConnection {
             pendingPacketsToSend.clear();
             return;
         }
-        if (bindChannel == null) return;
-        if (bindChannel.isOpen() && bindChannel.isActive()) {
-            while (true) {
-                Object next = pendingPacketsToSend.poll();
-                if (next == null) break;
-                bindChannel.write(next);
-            }
-            bindChannel.flush();
-        }
+        sendPacket(null);
     }
 
     public void disconnect() {
@@ -108,6 +135,7 @@ public abstract class ClientConnection {
     }
 
 
+    @SuppressWarnings("UnnecessaryReturnStatement")
     protected void handlePacket(ChannelHandlerContext ctx, Packet msg) {
         if (msg == PkgKeepAlive.INSTANCE) return;
         if (msg instanceof PkgNewProcessCode.Rsp) {
@@ -119,6 +147,11 @@ public abstract class ClientConnection {
             if (rsp.ticket != null) {
                 onTickReceived(rsp.ticket, rsp.fastcode);
             }
+            return;
+        }
+        if (msg instanceof PkgProcessCodeInfo.Response) {
+            onReceivedProcessCodeInfo((PkgProcessCodeInfo.Response) msg);
+            return;
         }
     }
 

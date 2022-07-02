@@ -112,6 +112,10 @@ public class PkgCodec {
                 PkgNewProcessCode.Complete.CODEC,
                 PkgQueryProcessCodeStatus.Req.CODEC,
                 PkgQueryProcessCodeStatus.Rsp.CODEC,
+                PkgProcessCodeInfo.Update.CODEC,
+                PkgProcessCodeInfo.Refresh.CODEC,
+                PkgProcessCodeInfo.Query.CODEC,
+                PkgProcessCodeInfo.Response.CODEC,
         };
     }
 

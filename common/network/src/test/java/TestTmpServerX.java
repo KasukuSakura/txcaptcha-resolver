@@ -8,6 +8,7 @@
  */
 
 import com.kasukusakura.tcrs.client.AutoReconnectClientConnection;
+import com.kasukusakura.tcrs.network.packets.PkgProcessCodeInfo;
 import com.kasukusakura.tcrs.server.TCRSServerChannelInitializer;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
@@ -51,6 +52,11 @@ public class TestTmpServerX {
                 myticket = ticket;
                 System.out.println("CLIENT: Received ticket: " + new String(ticket));
             }
+
+            @Override
+            protected void onReceivedProcessCodeInfo(PkgProcessCodeInfo.Response response) {
+                System.out.println("CLIENT: ProcessCodeInfo: type=" + response.captchaType + ", data=" + (response.captchaData != null ? new String(response.captchaData) : "<null>"));
+            }
         }
 
         MyConnection connection = new MyConnection();
@@ -58,6 +64,8 @@ public class TestTmpServerX {
 
         connection.sendNewFastCodeReq();
         Thread.sleep(1000L);
+        connection.sendProcessCodeInfoUpdate(50, null, connection.mycode);
+        connection.fetchProcessCodeInfo(connection.mycode);
         connection.sendTicketQueryRequest(connection.mycode);
         Thread.sleep(1000L);
         connection.sendTicketQueryRequest(connection.mycode);
