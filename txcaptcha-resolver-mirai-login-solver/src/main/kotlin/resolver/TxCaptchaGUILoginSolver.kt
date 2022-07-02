@@ -24,6 +24,7 @@ import io.netty.channel.nio.NioEventLoopGroup
 import io.netty.channel.socket.nio.NioServerSocketChannel
 import kotlinx.coroutines.*
 import net.mamoe.mirai.Bot
+import net.mamoe.mirai.network.CustomLoginFailedException
 import net.mamoe.mirai.utils.LoginSolver
 import net.mamoe.mirai.utils.MiraiLogger
 import net.mamoe.mirai.utils.debug
@@ -65,7 +66,7 @@ object TxCaptchaGUILoginSolver : LoginSolver() {
     }
 
     override suspend fun onSolveUnsafeDeviceLoginVerify(bot: Bot, url: String): String? {
-        TODO("Not yet implemented")
+        return onSolveUnsafeDeviceLoginVerify(bot.id, url)
     }
 
 
@@ -211,15 +212,7 @@ object TxCaptchaGUILoginSolver : LoginSolver() {
                                         }&port=${remoteAddress.port}"
                                         logger.debug { fasturl }
 
-                                        val bitMatrix = QRCodeWriter().encode(
-                                            fasturl,
-                                            BarcodeFormat.QR_CODE,
-                                            500,
-                                            500
-                                        )
-
-                                        val img = MatrixToImageWriter.toBufferedImage(bitMatrix)
-                                        qrcode.icon = ImageIcon(img)
+                                        qrcode.icon = ImageIcon(fasturl.renderQRCode())
                                     }
                                 }
                             }
@@ -297,6 +290,35 @@ object TxCaptchaGUILoginSolver : LoginSolver() {
             logger.debug { "Response from TopLevel: $rsp" }
         }.valueAsString
     }
+
+    internal suspend fun onSolveUnsafeDeviceLoginVerify(botid: Long, url: String): String? {
+        val rsp = openWindowCommon(JFrame(), isTopLevel = true, title = "UnsafeDeviceVerify($botid)") {
+            appendFillX(
+                JLabel(
+                    """
+                <html>
+                需要进行账户安全认证<br>
+                该账户有设备锁/不常用登录地点/不常用设备登录的问题<br>
+                请在<b>手机 QQ</b> 打开下面链接
+                成功后请关闭该窗口
+            """.trimIndent()
+                )
+            )
+            filledTextField("url", url)
+            appendFillX(JLabel(ImageIcon(url.renderQRCode())))
+            optionPane.optionType = JOptionPane.OK_CANCEL_OPTION
+        }
+        if (rsp is WindowResult.WindowClosed) return null
+        if (rsp.cancelled) throw UnsafeDeviceLoginVerifyCancelledException(true, "Cancelled")
+        return null
+    }
+}
+
+internal class UnsafeDeviceLoginVerifyCancelledException : CustomLoginFailedException {
+    public constructor(killBot: Boolean) : super(killBot)
+    public constructor(killBot: Boolean, message: String?) : super(killBot, message)
+    public constructor(killBot: Boolean, message: String?, cause: Throwable?) : super(killBot, message, cause)
+    public constructor(killBot: Boolean, cause: Throwable?) : super(killBot, cause = cause)
 }
 
 internal sealed class WindowResult {
@@ -535,8 +557,18 @@ internal suspend fun openWindowCommon(
     fun processed() {
         val value0 = optionPane.value
         if (value0 is WindowResult) response.complete(value0)
-        // Unknown
-        response.complete(WindowResult.Cancelled)
+        if (optionPane.options == null) {
+            val rsp = when (value0) {
+                JOptionPane.OK_OPTION -> WindowResult.SelectedOK
+                JOptionPane.CANCEL_OPTION -> WindowResult.Cancelled
+                JOptionPane.NO_OPTION -> WindowResult.Cancelled
+                else -> WindowResult.Cancelled // Unknown
+            }
+            response.complete(rsp)
+        } else {
+            // Unknown
+            response.complete(WindowResult.Cancelled)
+        }
     }
 
     val listener = PropertyChangeListener { evt ->
@@ -639,4 +671,15 @@ suspend fun ChannelFuture.awaitKotlin(): ChannelFuture {
         addListener { cont.resume(Unit) }
     }
     return this
+}
+
+internal fun String.renderQRCode(width: Int = 500, height: Int = 500): BufferedImage {
+    val bitMatrix = QRCodeWriter().encode(
+        this,
+        BarcodeFormat.QR_CODE,
+        width,
+        height
+    )
+
+    return MatrixToImageWriter.toBufferedImage(bitMatrix)
 }
