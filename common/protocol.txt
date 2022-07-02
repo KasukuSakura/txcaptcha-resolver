@@ -59,7 +59,7 @@ defpkg  [  9]   ProcessCodeInfoQueryResponse {
 ## QRCode Exchange                                                    ##
 ########################################################################
 
-<txcaptcha>:=/captcha?url=.......&fastcode=......&server=.......&serverport=.....
+<txcaptcha>:=/captcha?fastcode=......&server=.......&serverport=.....
 
 ########################################################################
 ## Full Connection                                                    ##
