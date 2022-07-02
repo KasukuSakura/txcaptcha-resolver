@@ -53,7 +53,7 @@ public class TCRSServerChannelInitializer extends ChannelInitializer<Channel> {
     @Override
     protected void initChannel(Channel ch) throws Exception {
         ch.pipeline()
-                .addLast("timeout", new ReadTimeoutHandler(3000, TimeUnit.MILLISECONDS))
+                .addLast("timeout", new ReadTimeoutHandler(10000, TimeUnit.MILLISECONDS))
                 .addLast("encoder", codec.getEncoder())
                 .addLast("decoder", codec.getDecoder())
                 .addLast("processor", new TCRSServerChannelHandler());
@@ -61,7 +61,10 @@ public class TCRSServerChannelInitializer extends ChannelInitializer<Channel> {
 
     @SuppressWarnings("UnnecessaryReturnStatement")
     private void handlePacket(ChannelHandlerContext ctx, Packet pkg) {
-        if (pkg == PkgKeepAlive.INSTANCE) return;
+        if (pkg == PkgKeepAlive.INSTANCE) {
+            ctx.writeAndFlush(pkg);
+            return;
+        }
         if (pkg == PkgNewProcessCode.Req.INSTANCE) {
             byte[] tmp = new byte[8];
             CusPkgRsp rsp = new CusPkgRsp();
@@ -148,10 +151,14 @@ public class TCRSServerChannelInitializer extends ChannelInitializer<Channel> {
         }
     }
 
+    protected void logError(Throwable error) {
+        error.printStackTrace(System.err);
+    }
+
     private class TCRSServerChannelHandler extends ChannelInboundHandlerAdapter {
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-            cause.printStackTrace(System.out);
+            logError(cause);
             ctx.channel().close();
         }
 

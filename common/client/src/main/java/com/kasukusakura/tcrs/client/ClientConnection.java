@@ -159,7 +159,7 @@ public abstract class ClientConnection {
         @Override
         protected void initChannel(Channel ch) throws Exception {
             ch.pipeline()
-                    .addLast("timeout", new ReadTimeoutHandler(3000, TimeUnit.MILLISECONDS))
+                    .addLast("timeout", new ReadTimeoutHandler(10000, TimeUnit.MILLISECONDS))
                     .addLast("encoder", codec.getEncoder())
                     .addLast("decoder", codec.getDecoder())
                     .addLast("processor", new ClientChannelHandler());
