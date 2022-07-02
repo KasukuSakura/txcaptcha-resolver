@@ -39,6 +39,10 @@ public class TCRSServerChannelInitializer extends ChannelInitializer<Channel> {
     protected void debugMsg(ChannelHandlerContext ctx, Supplier<String> msg) {
     }
 
+    protected void debugMsgVerbose(ChannelHandlerContext ctx, Supplier<String> msg) {
+        debugMsg(ctx, msg);
+    }
+
     private static class CusPkgRsp extends PkgQueryProcessCodeStatus.Rsp {
         public long allocateTime;
         public int captchaType;
@@ -98,7 +102,11 @@ public class TCRSServerChannelInitializer extends ChannelInitializer<Channel> {
             String key = new String(req.fastcode, StandardCharsets.ISO_8859_1);
             CusPkgRsp rsp = processes.get(key);
             if (rsp != null) {
-                debugMsg(ctx, () -> "Process code query [" + key + "]: " + (rsp.ticket == null ? "<waiting>" : new String(rsp.ticket)));
+                debugMsgMayVerbose(
+                        rsp.ticket == null,
+                        ctx,
+                        () -> "Process code query [" + key + "]: " + (rsp.ticket == null ? "<waiting>" : new String(rsp.ticket))
+                );
                 ctx.write(rsp);
             } else {
                 debugMsg(ctx, () -> "Process code query [" + key + "]: <unknown key>");
@@ -149,6 +157,11 @@ public class TCRSServerChannelInitializer extends ChannelInitializer<Channel> {
             debugMsg(ctx, () -> "Responded PkgProcessCodeInfo.Query[" + key + "] with captcha type[" + session.captchaType + "]");
             return;
         }
+    }
+
+    private void debugMsgMayVerbose(boolean isVerbose, ChannelHandlerContext ctx, Supplier<String> msg) {
+        if (isVerbose) debugMsgVerbose(ctx, msg);
+        else debugMsg(ctx, msg);
     }
 
     protected void logError(Throwable error) {
