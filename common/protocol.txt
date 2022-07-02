@@ -17,23 +17,42 @@ defpkg [   1]   NewProcessCodeReq {
 }
 
 defpkg [   2]   NewProcessCodeResp {
-    byte    fastcode[8];
+    byte    fastcode[*];
 }
 
 defpkg [   3]   ProcessCodeComplete {
     int16   ticketlen;
     byte    ticket[ticketlen];
-    byte    fastcode[8];
+    byte    fastcode[*];
 }
 
 defpkg [   4]   QueryProcessCodeStatus {
-    byte    fastcode[8];
+    byte    fastcode[*];
 }
 
-defpkg [   5]   QueryProcssCodeStatusResp {
+defpkg [   5]   QueryProcessCodeStatusResp {
     bool    completed;
     utf-8   ticket;
-    byte    fastcode[8];
+    byte    fastcode[*];
+}
+
+defpkg [   6]   ProcessCodeInfoUpdate {
+    int16   captcha_type;
+    int16   captcha_data_len;
+    byte    captcha_data[captcha_data_len];
+    byte    fastcode[*];
+}
+defpkg  [  7]   ProcessCodeInfoRefresh {
+    byte    fastcode[*];
+}
+defpkg  [  8]   ProcessCodeInfoQuery {
+    byte    fastcode[*];
+}
+defpkg  [  9]   ProcessCodeInfoQueryResponse {
+    int16   captcha_type;       // 0 == captcha request not found
+    int16   captcha_data_len;   // 0 when captcha not found
+    byte    captcha_data[captcha_data_len];
+    byte    fastcode[*];
 }
 
 ########################################################################
@@ -41,3 +60,39 @@ defpkg [   5]   QueryProcssCodeStatusResp {
 ########################################################################
 
 <txcaptcha>:=/captcha?url=.......&fastcode=......&server=.......&serverport=.....
+
+########################################################################
+## Full Connection                                                    ##
+########################################################################
+
+-------------------------------------------------------------------------------------------------
+|     Desktop   |                   Exchange Server         |       Captcha Resolver            |
+-------------------------------------------------------------------------------------------------
+        |                               |                                   |
+        |- NewProcessCodeReq ---------->|                                   |
+        |                               |                                   |
+        |<- NewProcessCodeResp ---------|                                   |
+        |                               |                                   |
+        |- ProcessCodeInfoUpdate -----> |                                   |
+        |- Display fastcode to monitor  |                                   |
+        |                               |                                   |
+        |                               |                                   |
+        | #### Keep Alive          #### |                                   |
+        |- ProcessCodeInfoRefresh ----->|                                   |
+        |- ProcessCodeInfoUpdate  ----->|                                   |
+        |- Keep Alive             ----->|                                   |
+        |                               |                                   |
+        |                               |<- ProcessCodeInfoQuery -----------|
+        |                               |                                   |
+        |                               |-- ProcessCodeInfoQueryResponse -->|
+        |                               |                                   |
+        |                               |                                   |
+        |                               |<-------- ProcessCodeComplete -----|
+        |                               |                      Disconnect --|
+        |                               |             Close resolver view --/
+        | #### Loop Query          #### |
+        |- QueryProcessCodeStatus ----->|
+        |<-- QueryProcessCodeStatusResp-|
+        |                               |
+        \- <Continue or disconnect>
+
